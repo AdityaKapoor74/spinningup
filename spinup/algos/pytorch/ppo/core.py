@@ -7,6 +7,8 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 
+from spinup.utils.normalization import ObservationNormalizer
+
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -109,10 +111,22 @@ class MLPActorCritic(nn.Module):
 
 
     def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(64,64), activation=nn.Tanh):
+                 hidden_sizes=(64,64), activation=nn.Tanh,
+                 normalize_observations=True, obs_clip_range=10.0):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
+
+        # Observation normalization
+        self.normalize_observations = normalize_observations
+        if self.normalize_observations:
+            self.obs_normalizer = ObservationNormalizer(
+                obs_dim=obs_dim,
+                device='cpu',  # Will be moved to correct device later
+                clip_range=obs_clip_range
+            )
+        else:
+            self.obs_normalizer = None
 
         # policy builder depends on action space
         if isinstance(action_space, Box):
@@ -123,13 +137,36 @@ class MLPActorCritic(nn.Module):
         # build value function
         self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
 
-    def step(self, obs):
+        # Track if we're in training mode for normalization updates
+        self.training_mode = True
+
+    def _normalize_obs(self, obs, update_stats=None):
+        """
+        Normalize observations if normalization is enabled.
+        
+        Args:
+            obs: Observations to normalize
+            update_stats: Whether to update normalization statistics.
+                         If None, uses self.training_mode
+        """
+        if not self.normalize_observations:
+            return obs
+        
+        if update_stats is None:
+            update_stats = self.training_mode
+            
+        return self.obs_normalizer(obs, update_stats=update_stats)
+
+    def step(self, obs, update_obs_stats=True):
         with torch.no_grad():
-            pi = self.pi._distribution(obs)
+            # Normalize observations
+            obs_normalized = self._normalize_obs(obs, update_stats=update_obs_stats)
+            
+            pi = self.pi._distribution(obs_normalized)
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
         return a.numpy(), v.numpy(), logp_a.numpy()
 
-    def act(self, obs):
+    def act(self, obs, update_obs_stats=False):
         return self.step(obs)[0]
