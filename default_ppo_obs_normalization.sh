@@ -4,7 +4,7 @@ for seed in 0 10 20 30 40; do
     python -m spinup.run ppo \
         --env Walker2d-v2 \
         --normalize_obs \
-        --exp_name walker2d_seed_$seed \
+        --exp_name walker2d_input_norm_seed_$seed \
         --epochs 300 \
         --seed $seed \
         --data_dir ./data \
