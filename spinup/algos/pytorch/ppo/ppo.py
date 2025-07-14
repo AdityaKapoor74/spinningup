@@ -7,6 +7,7 @@ import spinup.algos.pytorch.ppo.core as core
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+from spinup.utils.env_wrappers import make_env_with_normalization
 
 
 class PPOBuffer:
@@ -89,7 +90,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10,
-        normalize_obs=True, obs_clip=10.0):
+        normalize_obs=True, clip_obs=10.0):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -211,13 +212,17 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     np.random.seed(seed)
 
     # Instantiate environment
-    env = env_fn()
+    # env = env_fn()
+    env = make_env_with_normalization(
+        env_fn=env_fn,
+        normalize_observations=normalize_obs,
+        clip_obs=clip_obs,
+        gamma=gamma
+    )
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
 
     # Create actor-critic module
-    ac_kwargs['normalize_observations'] = normalize_obs
-    ac_kwargs['obs_clip_range'] = obs_clip
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
     # Sync params across processes
@@ -227,6 +232,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
+    # Log normalization setup
+    if normalize_obs:
+        logger.log('Observation normalization: ENABLED via environment wrapper')
+        logger.log(f'Observation clip range: {clip_obs}')
+    else:
+        logger.log('Observation normalization: DISABLED')
+
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
     buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
@@ -235,10 +247,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def compute_loss_pi(data):
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
-        # Disable normalization during updates
-        ac.set_obs_update_mode(update_stats=False)
-
-        # Policy loss -- since we are passing it to the policy's forward method directly, we don't have to switch to worry about observation normalization and clipping
         pi, logp = ac.pi(obs, act)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
@@ -256,9 +264,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up function for computing value loss
     def compute_loss_v(data):
         obs, ret = data['obs'], data['ret']
-        # Disable normalization during updates
-        ac.set_obs_update_mode(update_stats=False)
-        # since we are passing it to the value's forward method directly, we don't have to switch to worry about observation normalization and clipping
         return ((ac.v(obs) - ret)**2).mean()
 
     # Set up optimizers for policy and value function
@@ -311,7 +316,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         if normalize_obs:
-            ac.set_obs_update_mode(update_stats=True)
+            # SET WRAPPER TO TRAINING MODE (updates normalization stats)
+            env.set_training(True)
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
@@ -320,11 +326,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             ep_len += 1
 
             # save and log
-            if normalize_obs:
-                o_tensor = torch.as_tensor(o, dtype=torch.float32)
-                ac.set_obs_update_mode(update_stats=False)
-                o = ac._normalize_obs(o_tensor).numpy()
-                ac.set_obs_update_mode(update_stats=True)
             buf.store(o, a, r, v, logp)
             logger.store(VVals=v)
             
@@ -349,6 +350,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
                 o, ep_ret, ep_len = env.reset(), 0, 0
 
+        # SYNC NORMALIZATION STATISTICS ACROSS MPI PROCESSES
+        env.sync_running_stats()
+
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -372,6 +376,18 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('ClipFrac', average_only=True)
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
+
+        # Log normalization statistics if enabled
+        if normalize_obs:
+            stats = env.get_stats_dict()
+            if 'obs_rms' in stats:
+                obs_mean = np.mean(stats['obs_rms']['mean'])
+                obs_var = np.mean(stats['obs_rms']['var'])
+                obs_count = stats['obs_rms']['count']
+                logger.log_tabular('ObsMean', obs_mean)
+                logger.log_tabular('ObsVar', obs_var)
+                logger.log_tabular('ObsCount', obs_count)
+
         logger.dump_tabular()
 
 if __name__ == '__main__':
@@ -387,7 +403,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='ppo')
     parser.add_argument('--normalize_obs', action='store_true', default=True)
-    parser.add_argument('--obs_clip', type=float, default=None)
+    parser.add_argument('--clip_obs', type=float, default=None)
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
@@ -400,4 +416,4 @@ if __name__ == '__main__':
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs,
         normalize_obs=args.normalize_obs,
-        obs_clip=args.obs_clip)
+        clip_obs=args.clip_obs)
