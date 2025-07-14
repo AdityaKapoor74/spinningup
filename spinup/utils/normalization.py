@@ -47,7 +47,7 @@ class RunningMeanStd:
         new_mean = self.mean + delta * batch_count / tot_count
         m_a = self.var * self.count
         m_b = batch_var * batch_count
-        M2 = m_a + m_b + torch.square(delta) * self.count * batch_count / tot_count
+        M2 = m_a + m_b + torch.pow(delta, 2) * self.count * batch_count / tot_count
         new_var = M2 / tot_count
 
         self.mean = new_mean
