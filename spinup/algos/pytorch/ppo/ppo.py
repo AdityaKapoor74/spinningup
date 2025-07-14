@@ -235,6 +235,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def compute_loss_pi(data):
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
+        # Disable normalization during updates
+        ac.set_obs_update_mode(update_stats=False)
+
         # Policy loss -- since we are passing it to the policy's forward method directly, we don't have to switch to worry about observation normalization and clipping
         pi, logp = ac.pi(obs, act)
         ratio = torch.exp(logp - logp_old)
@@ -253,6 +256,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up function for computing value loss
     def compute_loss_v(data):
         obs, ret = data['obs'], data['ret']
+        # Disable normalization during updates
+        ac.set_obs_update_mode(update_stats=False)
         # since we are passing it to the value's forward method directly, we don't have to switch to worry about observation normalization and clipping
         return ((ac.v(obs) - ret)**2).mean()
 
@@ -317,7 +322,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # save and log
             if normalize_obs:
                 o_tensor = torch.as_tensor(o, dtype=torch.float32)
+                ac.set_obs_update_mode(update_stats=False)
                 o = ac._normalize_obs(o_tensor).numpy()
+                ac.set_obs_update_mode(update_stats=True)
             buf.store(o, a, r, v, logp)
             logger.store(VVals=v)
             
