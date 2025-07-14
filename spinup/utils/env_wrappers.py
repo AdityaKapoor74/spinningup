@@ -15,7 +15,7 @@ class VecNormalize(gym.Wrapper):
     
     This wrapper normalizes observations using running mean and standard deviation,
     exactly as implemented in OpenAI Baselines and published PPO papers.
-    
+
     """
     
     def __init__(self, env, ob=True, clipob=10.0, 
@@ -74,8 +74,7 @@ class VecNormalize(gym.Wrapper):
             self.obs_rms.update(obs)
         
         # Normalize and clip
-        # obs_norm = (obs - self.obs_rms.mean) / np.sqrt(self.obs_rms.var + self.epsilon)
-        obs_norm = self.obs_rms.normalize(obs)
+        obs_norm = (obs - self.obs_rms.mean) / np.sqrt(self.obs_rms.var + self.epsilon)
         
         if self.clipob > 0.0:
             obs_norm = np.clip(obs_norm, -self.clipob, self.clipob)
