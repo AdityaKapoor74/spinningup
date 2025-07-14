@@ -7,8 +7,6 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 
-from spinup.utils.normalization import ObservationNormalizer
-
 
 def combined_shape(length, shape=None):
     if shape is None:
