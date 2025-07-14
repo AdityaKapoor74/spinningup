@@ -315,6 +315,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             ep_len += 1
 
             # save and log
+            if normalize_obs:
+                o_tensor = torch.as_tensor(o, dtype=torch.float32)
+                o = ac._normalize_obs(o_tensor).numpy()
             buf.store(o, a, r, v, logp)
             logger.store(VVals=v)
             
