@@ -88,7 +88,8 @@ class PPOBuffer:
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=10,
+        normalize_observations=True, obs_clip_range=10.0):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -190,6 +191,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
 
+        normalize_observations (bool): Whether to normalize observations using
+            running mean and standard deviation.
+        
+        obs_clip_range (float): Range to clip normalized observations.
+
     """
 
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
@@ -210,6 +216,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     act_dim = env.action_space.shape
 
     # Create actor-critic module
+    ac_kwargs['normalize_observations'] = normalize_observations
+    ac_kwargs['obs_clip_range'] = obs_clip_range
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
     # Sync params across processes
@@ -227,7 +235,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def compute_loss_pi(data):
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
-        # Policy loss
+        # Policy loss -- since we are passing it to the policy's forward method directly, we don't have to switch to worry about observation normalization and clipping
         pi, logp = ac.pi(obs, act)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
@@ -245,6 +253,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up function for computing value loss
     def compute_loss_v(data):
         obs, ret = data['obs'], data['ret']
+        # since we are passing it to the value's forward method directly, we don't have to switch to worry about observation normalization and clipping
         return ((ac.v(obs) - ret)**2).mean()
 
     # Set up optimizers for policy and value function
@@ -296,6 +305,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+        if normalize_observations:
+            ac.set_obs_update_mode(update_stats=True)
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
@@ -365,6 +376,8 @@ if __name__ == '__main__':
     parser.add_argument('--steps', type=int, default=4000)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='ppo')
+    parser.add_argument('--normalize_obs', action='store_true', default=True)
+    parser.add_argument('--obs_clip', type=float, default=10.0)
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
@@ -375,4 +388,6 @@ if __name__ == '__main__':
     ppo(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-        logger_kwargs=logger_kwargs)
+        logger_kwargs=logger_kwargs,
+        normalize_observations=args.normalize_obs,
+        obs_clip_range=args.obs_clip)
