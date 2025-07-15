@@ -212,13 +212,16 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     np.random.seed(seed)
 
     # Instantiate environment
-    # env = env_fn()
-    env = make_env_with_normalization(
-        env_fn=env_fn,
-        normalize_observations=normalize_obs,
-        clip_obs=clip_obs,
-        gamma=gamma
-    )
+    env = env_fn()
+    if normalize_obs:
+        env = gym.wrappers.NormalizeObservation(env)
+        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+    # env = make_env_with_normalization(
+    #     env_fn=env_fn,
+    #     normalize_observations=normalize_obs,
+    #     clip_obs=clip_obs,
+    #     gamma=gamma
+    # )
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
 
@@ -315,9 +318,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
-        if normalize_obs:
-            # SET WRAPPER TO TRAINING MODE (updates normalization stats)
-            env.set_training(True)
+        # if normalize_obs:
+        #     # SET WRAPPER TO TRAINING MODE (updates normalization stats)
+        #     env.set_training(True)
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
@@ -351,7 +354,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 o, ep_ret, ep_len = env.reset(), 0, 0
 
         # SYNC NORMALIZATION STATISTICS ACROSS MPI PROCESSES
-        env.sync_running_stats()
+        # env.sync_running_stats()
 
 
         # Save model
@@ -378,15 +381,15 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Time', time.time()-start_time)
 
         # Log normalization statistics if enabled
-        if normalize_obs:
-            stats = env.get_stats_dict()
-            if 'obs_rms' in stats:
-                obs_mean = np.mean(stats['obs_rms']['mean'])
-                obs_var = np.mean(stats['obs_rms']['var'])
-                obs_count = stats['obs_rms']['count']
-                logger.log_tabular('ObsMean', obs_mean)
-                logger.log_tabular('ObsVar', obs_var)
-                logger.log_tabular('ObsCount', obs_count)
+        # if normalize_obs:
+        #     stats = env.get_stats_dict()
+        #     if 'obs_rms' in stats:
+        #         obs_mean = np.mean(stats['obs_rms']['mean'])
+        #         obs_var = np.mean(stats['obs_rms']['var'])
+        #         obs_count = stats['obs_rms']['count']
+        #         logger.log_tabular('ObsMean', obs_mean)
+        #         logger.log_tabular('ObsVar', obs_var)
+        #         logger.log_tabular('ObsCount', obs_count)
 
         logger.dump_tabular()
 
