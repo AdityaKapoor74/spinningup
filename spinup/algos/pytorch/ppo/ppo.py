@@ -90,7 +90,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10,
-        normalize_obs=True, clip_obs=10.0):
+        normalize_obs=True, clip_obs=10.0,
+        normalize_rewards=True, clip_rew=10.0):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -215,7 +216,12 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     env = env_fn()
     if normalize_obs:
         env = gym.wrappers.NormalizeObservation(env)
-        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+        if clip_obs is not None:
+            env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -clip_obs, clip_obs))
+    if normalize_rewards:
+        env = gym.wrappers.NormalizeReward(env)
+        if clip_rew is not None:
+            env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -clip_rew, clip_rew))
     # env = make_env_with_normalization(
     #     env_fn=env_fn,
     #     normalize_observations=normalize_obs,
@@ -407,6 +413,8 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', type=str, default='ppo')
     parser.add_argument('--normalize_obs', action='store_true', default=True)
     parser.add_argument('--clip_obs', type=float, default=None)
+    parser.add_argument('--normalize_rew', action='store_true', default=True)
+    parser.add_argument('--clip_rew', type=float, default=None)
     args = parser.parse_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
@@ -419,4 +427,6 @@ if __name__ == '__main__':
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs,
         normalize_obs=args.normalize_obs,
-        clip_obs=args.clip_obs)
+        clip_obs=args.clip_obs,
+        normalize_rewards=args.normalize_rew,
+        clip_rew=args.clip_rew)
